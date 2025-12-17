@@ -125,7 +125,7 @@ fun MapsScreen() {
     // AI Model
     val generativeModel = remember {
         GenerativeModel(
-            modelName = "gemini-1.5-flash",
+            modelName = "gemini-1.0-pro",
             apiKey = BuildConfig.GEMINI_API_KEY
         )
     }
