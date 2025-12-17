@@ -12,14 +12,15 @@ if (localPropertiesFile.exists()) {
     localProperties.load(localPropertiesFile.inputStream())
 }
 
+
 android {
-    namespace = "com.example.myapplication"
+    namespace = "com.david.sundaydrive"
     compileSdk {
         version = release(36)
     }
 
     defaultConfig {
-        applicationId = "com.example.myapplication"
+        applicationId = "com.david.sundaydrive"
         minSdk = 35
         targetSdk = 36
         versionCode = 1
@@ -32,6 +33,7 @@ android {
 
         val geminiApiKey = localProperties.getProperty("GEMINI_API_KEY") ?: "YOUR_GEMINI_API_KEY"
         buildConfigField("String", "GEMINI_API_KEY", "\"$geminiApiKey\"")
+        buildConfigField("String", "MAPS_API_KEY", "\"$mapsApiKey\"")
     }
 
     buildTypes {
@@ -68,12 +70,19 @@ dependencies {
     implementation(libs.androidx.compose.material3.adaptive.navigation.suite)
     implementation(libs.androidx.compose.material.icons.extended)
     
-    // Google Maps
+    // Google Maps & Places
     implementation(libs.play.services.maps)
     implementation(libs.maps.compose)
+    implementation(libs.places)
 
     // Gemini AI
     implementation(libs.generativeai)
+
+    // Directions API client (Retrofit)
+    implementation("com.squareup.retrofit2:retrofit:2.9.0")
+    implementation("com.squareup.retrofit2:converter-gson:2.9.0")
+    implementation("com.google.maps:google-maps-services:2.2.0")
+    implementation("org.slf4j:slf4j-simple:1.7.25") // Required for google-maps-services
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

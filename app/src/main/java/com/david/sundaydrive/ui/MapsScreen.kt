@@ -1,4 +1,4 @@
-package com.example.myapplication.ui
+package com.david.sundaydrive.ui
 
 import android.location.Geocoder
 import android.speech.tts.TextToSpeech
@@ -30,6 +30,7 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -55,15 +56,19 @@ import com.google.android.libraries.places.api.model.AutocompleteSessionToken
 import com.google.android.libraries.places.api.model.Place
 import com.google.android.libraries.places.api.net.FindAutocompletePredictionsRequest
 import com.google.android.libraries.places.api.net.PlacesClient
+import com.google.maps.GeoApiContext
+import com.google.maps.DirectionsApi
 import com.google.maps.android.compose.GoogleMap
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.Polyline
 import com.google.maps.android.compose.rememberCameraPositionState
+import com.google.maps.model.TravelMode
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.util.Locale
+import kotlin.math.roundToInt
 
 @Composable
 fun MapsScreen() {
@@ -96,13 +101,21 @@ fun MapsScreen() {
         Places.createClient(context)
     }
 
+    // Initialize GeoApiContext for Directions API
+    val geoApiContext = remember {
+        GeoApiContext.Builder()
+            .apiKey(BuildConfig.MAPS_API_KEY)
+            .build()
+    }
+
     // Route State
     var startName by remember { mutableStateOf("") }
     var startLatLng by remember { mutableStateOf<LatLng?>(null) }
     var endName by remember { mutableStateOf("") }
     var endLatLng by remember { mutableStateOf<LatLng?>(null) }
+    var routePolyline by remember { mutableStateOf<List<LatLng>>(emptyList()) }
 
-    var maxDetourMiles by remember { mutableStateOf(5) }
+    var maxDetourMiles by remember { mutableStateOf(5f) }
     var isTourActive by remember { mutableStateOf(false) }
 
     // State for POIs found by AI
@@ -112,7 +125,7 @@ fun MapsScreen() {
     // AI Model
     val generativeModel = remember {
         GenerativeModel(
-            modelName = "gemini-pro",
+            modelName = "gemini-1.5-flash",
             apiKey = BuildConfig.GEMINI_API_KEY
         )
     }
@@ -128,6 +141,7 @@ fun MapsScreen() {
         startLatLng?.let { builder.include(it) }
         endLatLng?.let { builder.include(it) }
         newMarkers.forEach { builder.include(it) }
+        routePolyline.forEach { builder.include(it) }
         
         try {
             if (newMarkers.isNotEmpty() || (startLatLng != null && endLatLng != null)) {
@@ -142,13 +156,49 @@ fun MapsScreen() {
         }
     }
 
+    // Helper to fetch route
+    fun fetchRoute() {
+        if (startLatLng == null || endLatLng == null) return
+        
+        scope.launch(Dispatchers.IO) {
+            try {
+                val result = DirectionsApi.newRequest(geoApiContext)
+                    .mode(TravelMode.DRIVING)
+                    .origin(com.google.maps.model.LatLng(startLatLng!!.latitude, startLatLng!!.longitude))
+                    .destination(com.google.maps.model.LatLng(endLatLng!!.latitude, endLatLng!!.longitude))
+                    .await()
+                
+                if (result.routes.isNotEmpty()) {
+                    val decodedPath = result.routes[0].overviewPolyline.decodePath()
+                    val newPolyline = decodedPath.map { LatLng(it.lat, it.lng) }
+                    withContext(Dispatchers.Main) {
+                        routePolyline = newPolyline
+                        zoomToFit(poiMarkers.map { it.first })
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("MapsScreen", "Error fetching route", e)
+                withContext(Dispatchers.Main) {
+                     Toast.makeText(context, "Could not fetch route: ${e.message}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         GoogleMap(
             modifier = Modifier.fillMaxSize(),
             cameraPositionState = cameraPositionState
         ) {
-            // Draw Route Line only if both points exist
-            if (startLatLng != null && endLatLng != null) {
+            // Draw Route Line from API
+            if (routePolyline.isNotEmpty()) {
+                Polyline(
+                    points = routePolyline,
+                    color = if (isTourActive) Color.Green else Color.Blue,
+                    width = 15f
+                )
+            } else if (startLatLng != null && endLatLng != null) {
+                // Fallback: straight line
                 Polyline(
                     points = listOf(startLatLng!!, endLatLng!!),
                     color = if (isTourActive) Color.Green else Color.Blue,
@@ -221,6 +271,7 @@ fun MapsScreen() {
                             startLatLng = latLng
                             cameraPositionState.position = CameraPosition.fromLatLngZoom(latLng, 8f)
                             poiMarkers.clear()
+                            fetchRoute()
                         },
                         icon = Icons.Default.Place
                     )
@@ -235,36 +286,21 @@ fun MapsScreen() {
                             endName = name
                             endLatLng = latLng
                             poiMarkers.clear()
+                            fetchRoute()
                         },
                         icon = Icons.Default.Navigation
                     )
 
                     Spacer(modifier = Modifier.height(12.dp))
 
-                    Text("Max Detour Distance:", style = MaterialTheme.typography.labelMedium)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Button(
-                            onClick = { maxDetourMiles = 5 },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (maxDetourMiles == 5) MaterialTheme.colorScheme.primary else Color.Gray
-                            ),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("5 Miles")
-                        }
-                        Button(
-                            onClick = { maxDetourMiles = 20 },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (maxDetourMiles == 20) MaterialTheme.colorScheme.primary else Color.Gray
-                            ),
-                            modifier = Modifier.weight(1f)
-                        ) {
-                            Text("20 Miles")
-                        }
-                    }
+                    Text("Max Detour Distance: ${maxDetourMiles.roundToInt()} Miles", style = MaterialTheme.typography.labelMedium)
+                    Slider(
+                        value = maxDetourMiles,
+                        onValueChange = { maxDetourMiles = it },
+                        valueRange = 5f..30f,
+                        steps = 24, // (30 - 5) / 1 - 1 = 24 steps
+                        modifier = Modifier.fillMaxWidth()
+                    )
                     
                     Spacer(modifier = Modifier.height(12.dp))
                     
@@ -327,7 +363,7 @@ fun MapsScreen() {
                         isLoading = true
                         scope.launch {
                             // SIMPLIFIED PROMPT to avoid safety filters
-                            val prompt = "List 3 famous tourist attractions between $startName and $endName. Format: Name; Name; Name"
+                            val prompt = "List 3 famous tourist attractions between $startName and $endName within ${maxDetourMiles.roundToInt()} miles detour. Format: Name; Name; Name"
                             
                             try {
                                 val response = generativeModel.generateContent(prompt)

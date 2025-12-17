@@ -1,4 +1,4 @@
-package com.example.myapplication.ui
+package com.david.sundaydrive.ui
 
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -32,7 +32,7 @@ fun AIScreen() {
 
     val generativeModel = remember {
         GenerativeModel(
-            modelName = "gemini-pro",
+            modelName = "gemini-1.5-flash",
             apiKey = BuildConfig.GEMINI_API_KEY
         )
     }
