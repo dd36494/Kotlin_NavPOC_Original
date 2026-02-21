@@ -56,6 +56,9 @@ android {
         compose = true
         buildConfig = true
     }
+    packagingOptions {
+        exclude("META-INF/DEPENDENCIES")
+    }
 }
 
 dependencies {
@@ -75,14 +78,13 @@ dependencies {
     implementation(libs.maps.compose)
     implementation(libs.places)
 
-    // Gemini AI
-    implementation(libs.generativeai)
+    // Gemini AI - Overriding with a specific, stable version
+    implementation("com.google.ai.client.generativeai:generativeai:0.1.0")
 
     // Directions API client (Retrofit)
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")
     implementation("com.google.maps:google-maps-services:2.2.0")
-    implementation("org.slf4j:slf4j-simple:1.7.25") // Required for google-maps-services
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

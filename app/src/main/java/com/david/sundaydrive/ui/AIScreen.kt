@@ -32,7 +32,7 @@ fun AIScreen() {
 
     val generativeModel = remember {
         GenerativeModel(
-            modelName = "gemini-1.5-flash",
+            modelName = "gemini-2.5-flash",
             apiKey = BuildConfig.GEMINI_API_KEY
         )
     }

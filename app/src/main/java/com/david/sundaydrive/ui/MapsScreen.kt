@@ -48,17 +48,22 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.david.sundaydrive.BuildConfig
 import com.google.ai.client.generativeai.GenerativeModel
+import com.google.ai.client.generativeai.type.BlockReason
+import com.google.ai.client.generativeai.type.FinishReason
 import com.google.android.gms.maps.model.CameraPosition
 import com.google.android.gms.maps.model.LatLng
 import com.google.android.gms.maps.model.LatLngBounds
 import com.google.android.libraries.places.api.Places
+import com.google.android.libraries.places.api.model.AutocompletePrediction
 import com.google.android.libraries.places.api.model.AutocompleteSessionToken
 import com.google.android.libraries.places.api.model.Place
+import com.google.android.libraries.places.api.net.FetchPlaceRequest
 import com.google.android.libraries.places.api.net.FindAutocompletePredictionsRequest
 import com.google.android.libraries.places.api.net.PlacesClient
 import com.google.maps.GeoApiContext
 import com.google.maps.DirectionsApi
 import com.google.maps.android.compose.GoogleMap
+import com.google.maps.android.compose.GoogleMapComposable
 import com.google.maps.android.compose.Marker
 import com.google.maps.android.compose.MarkerState
 import com.google.maps.android.compose.Polyline
@@ -108,6 +113,14 @@ fun MapsScreen() {
             .build()
     }
 
+    // AI Model
+    val generativeModel = remember {
+        GenerativeModel(
+            modelName = "gemini-2.5-flash",
+            apiKey = BuildConfig.GEMINI_API_KEY
+        )
+    }
+
     // Route State
     var startName by remember { mutableStateOf("") }
     var startLatLng by remember { mutableStateOf<LatLng?>(null) }
@@ -121,14 +134,6 @@ fun MapsScreen() {
     // State for POIs found by AI
     val poiMarkers = remember { mutableStateListOf<Pair<LatLng, String>>() }
     var isLoading by remember { mutableStateOf(false) }
-
-    // AI Model
-    val generativeModel = remember {
-        GenerativeModel(
-            modelName = "gemini-1.0-pro",
-            apiKey = BuildConfig.GEMINI_API_KEY
-        )
-    }
 
     // Camera
     val cameraPositionState = rememberCameraPositionState {
@@ -190,66 +195,7 @@ fun MapsScreen() {
             modifier = Modifier.fillMaxSize(),
             cameraPositionState = cameraPositionState
         ) {
-            // Draw Route Line from API
-            if (routePolyline.isNotEmpty()) {
-                Polyline(
-                    points = routePolyline,
-                    color = if (isTourActive) Color.Green else Color.Blue,
-                    width = 15f
-                )
-            } else if (startLatLng != null && endLatLng != null) {
-                // Fallback: straight line
-                Polyline(
-                    points = listOf(startLatLng!!, endLatLng!!),
-                    color = if (isTourActive) Color.Green else Color.Blue,
-                    width = 15f
-                )
-            }
-
-            // Start Marker
-            startLatLng?.let {
-                Marker(
-                    state = MarkerState(position = it),
-                    title = "Start: $startName",
-                    snippet = "Departure"
-                )
-            }
-
-            // End Marker
-            endLatLng?.let {
-                Marker(
-                    state = MarkerState(position = it),
-                    title = "End: $endName",
-                    snippet = "Destination"
-                )
-            }
-
-            // AI Markers
-            poiMarkers.forEach { (latLng, title) ->
-                Marker(
-                    state = MarkerState(position = latLng),
-                    title = title,
-                    snippet = "Click for Audio Tour",
-                    icon = com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(
-                        com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_MAGENTA
-                    ),
-                    onClick = {
-                        scope.launch {
-                            // Generate interesting fact
-                            val prompt = "Tell me a fun fact about $title."
-                            try {
-                                val fact = generativeModel.generateContent(prompt).text ?: "This is $title."
-                                tts?.speak(fact, TextToSpeech.QUEUE_FLUSH, null, null)
-                                Toast.makeText(context, "Playing Audio...", Toast.LENGTH_SHORT).show()
-                            } catch (e: Exception) {
-                                Log.e("MapsScreen", "Error generating fact for $title", e)
-                                tts?.speak("This is $title", TextToSpeech.QUEUE_FLUSH, null, null)
-                            }
-                        }
-                        false // Return false to allow default behavior (info window)
-                    }
-                )
-            }
+            MapContent(isTourActive, routePolyline, startLatLng, startName, endLatLng, endName, poiMarkers, generativeModel, tts, scope)
         }
 
         // Control Panel Overlay (Only show if tour is NOT active)
@@ -263,8 +209,9 @@ fun MapsScreen() {
             ) {
                 Column(modifier = Modifier.padding(12.dp)) {
                     LocationAutocompleteField(
+                        value = startName,
+                        onValueChange = { startName = it },
                         label = "From",
-                        initialValue = startName,
                         placesClient = placesClient,
                         onPlaceSelected = { name, latLng ->
                             startName = name
@@ -279,8 +226,9 @@ fun MapsScreen() {
                     Spacer(modifier = Modifier.height(8.dp))
 
                     LocationAutocompleteField(
+                        value = endName,
+                        onValueChange = { endName = it },
                         label = "To",
-                        initialValue = endName,
                         placesClient = placesClient,
                         onPlaceSelected = { name, latLng ->
                             endName = name
@@ -303,7 +251,7 @@ fun MapsScreen() {
                     )
                     
                     Spacer(modifier = Modifier.height(12.dp))
-                    
+
                     // START ROUTE BUTTON
                     Button(
                         onClick = {
@@ -368,7 +316,23 @@ fun MapsScreen() {
                             try {
                                 val response = generativeModel.generateContent(prompt)
                                 val placeNamesString = response.text ?: ""
-                                
+
+                                if (response.promptFeedback?.blockReason == BlockReason.SAFETY) {
+                                    Log.e("MapsScreen", "AI response blocked for safety reasons.")
+                                    withContext(Dispatchers.Main) {
+                                        Toast.makeText(context, "The AI blocked the response for safety reasons. Try a different route.", Toast.LENGTH_LONG).show()
+                                    }
+                                    return@launch
+                                }
+
+                                if (response.candidates.firstOrNull()?.finishReason == FinishReason.RECITATION) {
+                                    Log.e("MapsScreen", "AI response stopped for recitation reasons.")
+                                    withContext(Dispatchers.Main) {
+                                        Toast.makeText(context, "The AI response was stopped to avoid recitation.", Toast.LENGTH_LONG).show()
+                                    }
+                                    return@launch
+                                }
+
                                 withContext(Dispatchers.Main) {
                                      Toast.makeText(context, "AI suggests: $placeNamesString", Toast.LENGTH_SHORT).show()
                                 }
@@ -427,37 +391,114 @@ fun MapsScreen() {
     }
 }
 
+@GoogleMapComposable
+@Composable
+fun MapContent(
+    isTourActive: Boolean,
+    routePolyline: List<LatLng>,
+    startLatLng: LatLng?,
+    startName: String,
+    endLatLng: LatLng?,
+    endName: String,
+    poiMarkers: List<Pair<LatLng, String>>,
+    generativeModel: GenerativeModel,
+    tts: TextToSpeech?,
+    scope: kotlinx.coroutines.CoroutineScope
+) {
+    val context = LocalContext.current
+    // Draw Route Line from API
+    if (routePolyline.isNotEmpty()) {
+        Polyline(
+            points = routePolyline,
+            color = if (isTourActive) Color.Green else Color.Blue,
+            width = 15f
+        )
+    } else if (startLatLng != null && endLatLng != null) {
+        // Fallback: straight line
+        Polyline(
+            points = listOf(startLatLng, endLatLng),
+            color = if (isTourActive) Color.Green else Color.Blue,
+            width = 15f
+        )
+    }
+
+    // Start Marker
+    startLatLng?.let {
+        Marker(
+            state = MarkerState(position = it),
+            title = "Start: $startName",
+            snippet = "Departure"
+        )
+    }
+
+    // End Marker
+    endLatLng?.let {
+        Marker(
+            state = MarkerState(position = it),
+            title = "End: $endName",
+            snippet = "Destination"
+        )
+    }
+
+    // AI Markers
+    poiMarkers.forEach { (latLng, title) ->
+        Marker(
+            state = MarkerState(position = latLng),
+            title = title,
+            snippet = "Click for Audio Tour",
+            icon = com.google.android.gms.maps.model.BitmapDescriptorFactory.defaultMarker(
+                com.google.android.gms.maps.model.BitmapDescriptorFactory.HUE_MAGENTA
+            ),
+            onClick = {
+                scope.launch {
+                    // Generate interesting fact
+                    val prompt = "Tell me a fun fact about $title."
+                    try {
+                        val fact = generativeModel.generateContent(prompt).text ?: "This is $title."
+                        tts?.speak(fact, TextToSpeech.QUEUE_FLUSH, null, null)
+                        Toast.makeText(context, "Playing Audio...", Toast.LENGTH_SHORT).show()
+                    } catch (e: Exception) {
+                        Log.e("MapsScreen", "Error generating fact for $title", e)
+                        tts?.speak("This is $title", TextToSpeech.QUEUE_FLUSH, null, null)
+                    }
+                }
+                false // Return false to allow default behavior (info window)
+            }
+        )
+    }
+}
+
 @Composable
 fun LocationAutocompleteField(
+    value: String,
+    onValueChange: (String) -> Unit,
     label: String,
-    initialValue: String,
     placesClient: PlacesClient,
     onPlaceSelected: (String, LatLng) -> Unit,
     icon: androidx.compose.ui.graphics.vector.ImageVector
 ) {
-    var query by remember(initialValue) { mutableStateOf(initialValue) }
-    var predictions by remember { mutableStateOf<List<com.google.android.libraries.places.api.model.AutocompletePrediction>>(emptyList()) }
+    var predictions by remember { mutableStateOf<List<AutocompletePrediction>>(emptyList()) }
     var expanded by remember { mutableStateOf(false) }
-    
+    val sessionToken = remember { AutocompleteSessionToken.newInstance() }
+
     Column {
         OutlinedTextField(
-            value = query,
-            onValueChange = { newValue ->
-                query = newValue
+            value = value,
+            onValueChange = {
+                onValueChange(it)
                 expanded = true
                 
-                if (newValue.length > 2) {
-                    val token = AutocompleteSessionToken.newInstance()
+                if (it.length > 2) {
                     val request = FindAutocompletePredictionsRequest.builder()
-                        .setSessionToken(token)
-                        .setQuery(newValue)
+                        .setSessionToken(sessionToken)
+                        .setQuery(it)
                         .build()
 
                     placesClient.findAutocompletePredictions(request)
                         .addOnSuccessListener { response ->
                             predictions = response.autocompletePredictions
                         }
-                        .addOnFailureListener {
+                        .addOnFailureListener { 
                             predictions = emptyList()
                         }
                 }
@@ -483,17 +524,17 @@ fun LocationAutocompleteField(
                                 .clickable {
                                     val placeId = prediction.placeId
                                     val placeFields = listOf(Place.Field.ID, Place.Field.NAME, Place.Field.LAT_LNG)
-                                    val request = com.google.android.libraries.places.api.net.FetchPlaceRequest.newInstance(placeId, placeFields)
+                                    val request = FetchPlaceRequest.builder(placeId, placeFields)
+                                        .setSessionToken(sessionToken) // Reuse the same token for fetching details
+                                        .build()
 
                                     placesClient.fetchPlace(request)
                                         .addOnSuccessListener { response ->
                                             val place = response.place
                                             val latLng = place.latLng
                                             if (latLng != null) {
-                                                // We do NOT update 'query' here automatically to avoid confusion if the user wants to edit it
-                                                // Instead, we callback. The parent might update initialValue, which triggers the remember(initialValue) above
-                                                query = place.name ?: prediction.getPrimaryText(null).toString()
-                                                onPlaceSelected(query, latLng)
+                                                onValueChange(place.name ?: prediction.getPrimaryText(null).toString())
+                                                onPlaceSelected(place.name ?: prediction.getPrimaryText(null).toString(), latLng)
                                                 expanded = false
                                                 predictions = emptyList()
                                             }
@@ -501,7 +542,7 @@ fun LocationAutocompleteField(
                                 }
                                 .padding(16.dp)
                         ) {
-                            Text(text = prediction.getPrimaryText(null).toString())
+                            Text(text = prediction.getFullText(null).toString())
                         }
                     }
                 }
