@@ -213,7 +213,7 @@ fun MapsScreen() {
                         onValueChange = { startName = it },
                         label = "From",
                         placesClient = placesClient,
-                        onPlaceSelected = { name, latLng ->
+                        onPlaceSelected = { name, latLng, types ->
                             startName = name
                             startLatLng = latLng
                             cameraPositionState.position = CameraPosition.fromLatLngZoom(latLng, 8f)
@@ -230,7 +230,7 @@ fun MapsScreen() {
                         onValueChange = { endName = it },
                         label = "To",
                         placesClient = placesClient,
-                        onPlaceSelected = { name, latLng ->
+                        onPlaceSelected = { name, latLng, types ->
                             endName = name
                             endLatLng = latLng
                             poiMarkers.clear()
@@ -474,7 +474,7 @@ fun LocationAutocompleteField(
     onValueChange: (String) -> Unit,
     label: String,
     placesClient: PlacesClient,
-    onPlaceSelected: (String, LatLng) -> Unit,
+    onPlaceSelected: (String, LatLng, List<Place.Type>?) -> Unit,
     icon: androidx.compose.ui.graphics.vector.ImageVector
 ) {
     var predictions by remember { mutableStateOf<List<AutocompletePrediction>>(emptyList()) }
@@ -523,7 +523,7 @@ fun LocationAutocompleteField(
                                 .fillMaxWidth()
                                 .clickable {
                                     val placeId = prediction.placeId
-                                    val placeFields = listOf(Place.Field.ID, Place.Field.NAME, Place.Field.LAT_LNG)
+                                    val placeFields = listOf(Place.Field.ID, Place.Field.NAME, Place.Field.LAT_LNG, Place.Field.TYPES)
                                     val request = FetchPlaceRequest.builder(placeId, placeFields)
                                         .setSessionToken(sessionToken) // Reuse the same token for fetching details
                                         .build()
@@ -534,7 +534,7 @@ fun LocationAutocompleteField(
                                             val latLng = place.latLng
                                             if (latLng != null) {
                                                 onValueChange(place.name ?: prediction.getPrimaryText(null).toString())
-                                                onPlaceSelected(place.name ?: prediction.getPrimaryText(null).toString(), latLng)
+                                                onPlaceSelected(place.name ?: prediction.getPrimaryText(null).toString(), latLng, place.types)
                                                 expanded = false
                                                 predictions = emptyList()
                                             }
